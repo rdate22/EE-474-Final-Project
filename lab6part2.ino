@@ -214,23 +214,28 @@ void updateDirectionFromJoystick() {
   int dx = joyX - center;
   int dy = joyY - center;
 
+  // Reverse logic for joystick direction
   if (abs(dx) > abs(dy)) {
     if (dx > threshold && !(snakeDirX == -1 && snakeDirY == 0)) {
-      snakeDirX = 1;
+      // Moving joystick right -> snake moves right
+      snakeDirX = -1;
       snakeDirY = 0;
     }
     else if (dx < -threshold && !(snakeDirX == 1 && snakeDirY == 0)) {
-      snakeDirX = -1;
+      // Moving joystick left -> snake moves left
+      snakeDirX = 1;
       snakeDirY = 0;
     }
   } else {
     if (dy > threshold && !(snakeDirX == 0 && snakeDirY == -1)) {
-      snakeDirX = 0;
-      snakeDirY = 1;
-    }
-    else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) {
+      // Moving joystick up -> snake moves down (invert for correct behavior)
       snakeDirX = 0;
       snakeDirY = -1;
+    }
+    else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) {
+      // Moving joystick down -> snake moves up (invert for correct behavior)
+      snakeDirX = 0;
+      snakeDirY = 1;
     }
   }
 }

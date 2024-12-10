@@ -1,40 +1,38 @@
 #include <Arduino_FreeRTOS.h>
-#include <semphr.h> 
+#include <semphr.h>
 #include <string.h>
 #include <stdlib.h> // for rand()
 
 // ------------------- Configuration -------------------
-#define LED_BUILTIN_PIN 13     // On-board LED
-#define OFFBOARD_LED_PIN 7     // Off-board LED pin
-#define JOYSTICK_X_PIN A1      // Joystick X
-#define JOYSTICK_Y_PIN A2      // Joystick Y
+// Matrix SPI pins
+#define DIN_PIN 6  // Data In
+#define CLK_PIN 7  // Clock
+#define CS_PIN 5   // Chip Select
 
-// Matrix Pins (adjust these to your wiring)
-int rowPins[8] = {2,3,4,5,6,7,8,9};
-int colPins[8] = {10,11,12,13,A0,A3,A4,A5};
-// NOTE: Adjust pins as needed.
+// Matrix dimensions
+#define MATRIX_WIDTH 8
+#define MATRIX_HEIGHT 8
 
-#define MATRIX_SIZE 8
+// Joystick Pins
+#define JOYSTICK_X_PIN A0
+#define JOYSTICK_Y_PIN A1
 
 // Task configurations
 #define STACK_BLINK 128
 #define STACK_ANALOGREAD 128
-#define STACK_OFFBOARD_LED 128
 #define STACK_SNAKEGAME 256
 #define STACK_MATRIXDISPLAY 256
-#define STACK_MATRIXSCAN 256
 
 // Timing intervals
 #define BLINK_ON_MS 250
 #define BLINK_OFF_MS 100
 #define ANALOG_READ_MS 50
-#define SNAKE_UPDATE_MS 20     // 50 Hz update
-#define MATRIX_UPDATE_MS 20    // Also 50 Hz
-#define MATRIX_SCAN_DELAY_US 2000 // per row scanning delay
+#define SNAKE_UPDATE_MS 500     // Slower update: 2 Hz
+#define MATRIX_UPDATE_MS 50     // 20 Hz update
 
 // Snake game definitions
 struct SnakeSegment {
-  int x,y;
+  int x, y;
 };
 #define MAX_SNAKE_LENGTH 30
 
@@ -51,50 +49,43 @@ static bool hasFood = false;
 static int joyX = 512;
 static int joyY = 512;
 
-static bool matrixBuffer[8][8]; // Frame buffer for LED matrix
+static byte matrixBuffer[8]; // 8 bytes for an 8x8 matrix
 
 // Forward declarations
 void TaskBlink(void *pvParameters);
 void TaskAnalogReadJoystick(void *pvParameters);
-void TaskOffBoardLED(void *pvParameters);
 void TaskSnakeGame(void *pvParameters);
 void TaskMatrixDisplay(void *pvParameters);
-void TaskMatrixScan(void *pvParameters);
 
 // Helpers
 void matrixInit();
 void matrixClear();
 void matrixSetPixel(int x, int y, bool on);
-void matrixScanDisplay();
+void matrixSendData(byte address, byte data);
+void matrixSendBuffer();
 void snakeInit();
 void updateDirectionFromJoystick();
 void moveSnake();
 void placeFood();
 void drawSnakeAndFood();
-void checkCollision();
 void growSnake();
 
 // ------------------- SETUP & LOOP -------------------
 void setup() {
   Serial.begin(19200);
-  while(!Serial){;}
+  while (!Serial) {;}
 
-  pinMode(LED_BUILTIN_PIN, OUTPUT);
-  pinMode(OFFBOARD_LED_PIN, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
 
   matrixInit();
-  matrixClear();
-
   snakeInit();
   placeFood();
 
   // Create tasks
   xTaskCreate(TaskBlink, "Blink", STACK_BLINK, NULL, 2, NULL);
   xTaskCreate(TaskAnalogReadJoystick, "AnalogRead", STACK_ANALOGREAD, NULL, 1, NULL);
-  xTaskCreate(TaskOffBoardLED, "OffBoardLED", STACK_OFFBOARD_LED, NULL, 1, NULL);
   xTaskCreate(TaskSnakeGame, "SnakeGame", STACK_SNAKEGAME, NULL, 3, NULL);
-  xTaskCreate(TaskMatrixDisplay, "MatrixDisp", STACK_MATRIXDISPLAY, NULL, 1, NULL);
-  xTaskCreate(TaskMatrixScan, "MatrixScan", STACK_MATRIXSCAN, NULL, 2, NULL);
+  xTaskCreate(TaskMatrixDisplay, "MatrixDisplay", STACK_MATRIXDISPLAY, NULL, 2, NULL);
 
   vTaskStartScheduler();
 }
@@ -103,12 +94,55 @@ void loop() {
   // Empty, all handled by tasks
 }
 
+// ------------------- MATRIX CONTROL -------------------
+void matrixInit() {
+  pinMode(DIN_PIN, OUTPUT);
+  pinMode(CLK_PIN, OUTPUT);
+  pinMode(CS_PIN, OUTPUT);
+
+  digitalWrite(CS_PIN, HIGH); // Disable matrix communication
+  matrixClear();
+
+  // Initialize the MAX7219 registers
+  matrixSendData(0x09, 0x00); // Decode mode: None
+  matrixSendData(0x0A, 0x08); // Intensity: Medium
+  matrixSendData(0x0B, 0x07); // Scan limit: All rows
+  matrixSendData(0x0C, 0x01); // Shutdown: Normal operation
+  matrixSendData(0x0F, 0x00); // Display test: Off
+}
+
+void matrixClear() {
+  memset(matrixBuffer, 0, sizeof(matrixBuffer));
+  matrixSendBuffer();
+}
+
+void matrixSetPixel(int x, int y, bool on) {
+  if (x < 0 || x >= MATRIX_WIDTH || y < 0 || y >= MATRIX_HEIGHT) return;
+  if (on)
+    matrixBuffer[y] |= (1 << x);
+  else
+    matrixBuffer[y] &= ~(1 << x);
+}
+
+void matrixSendData(byte address, byte data) {
+  digitalWrite(CS_PIN, LOW); // Enable communication
+  shiftOut(DIN_PIN, CLK_PIN, MSBFIRST, address);
+  shiftOut(DIN_PIN, CLK_PIN, MSBFIRST, data);
+  digitalWrite(CS_PIN, HIGH); // Disable communication
+}
+
+void matrixSendBuffer() {
+  for (byte row = 0; row < 8; row++) {
+    matrixSendData(row + 1, matrixBuffer[row]);
+  }
+}
+
 // ------------------- SNAKE GAME LOGIC -------------------
 void snakeInit() {
   snakeLength = 3;
-  snakeHeadX = MATRIX_SIZE/2;
-  snakeHeadY = MATRIX_SIZE/2;
-  for (int i=0; i<snakeLength; i++){
+  snakeHeadX = MATRIX_WIDTH / 2;
+  snakeHeadY = MATRIX_HEIGHT / 2;
+  for (int i = 0; i < snakeLength; i++) {
     snake[i].x = snakeHeadX - i;
     snake[i].y = snakeHeadY;
   }
@@ -117,16 +151,15 @@ void snakeInit() {
 }
 
 void placeFood() {
-  // Place food in a random location not on the snake
-  // Simple approach: try random positions until we find a free spot
   int tries = 0;
   do {
-    foodX = random(0,8);
-    foodY = random(0,8);
+    foodX = random(0, MATRIX_WIDTH);
+    foodY = random(0, MATRIX_HEIGHT);
     bool onSnake = false;
-    for (int i=0; i<snakeLength; i++) {
+    for (int i = 0; i < snakeLength; i++) {
       if (snake[i].x == foodX && snake[i].y == foodY) {
-        onSnake = true; break;
+        onSnake = true;
+        break;
       }
     }
     if (!onSnake) {
@@ -135,36 +168,23 @@ void placeFood() {
     }
     tries++;
   } while (tries < 100);
-
-  // If we fail to place after 100 tries (unlikely), no food
   hasFood = false;
 }
 
 void updateDirectionFromJoystick() {
+  if (gameOver) return;
+
   int center = 512;
   int threshold = 200;
   int dx = joyX - center;
   int dy = joyY - center;
 
-  // favor horizontal or vertical based on which is larger
   if (abs(dx) > abs(dy)) {
-    // horizontal
-    if (dx > threshold) {
-      // move right
-      if (!(snakeDirX == -1 && snakeDirY == 0)) { snakeDirX=1; snakeDirY=0; }
-    } else if (dx < -threshold) {
-      // move left
-      if (!(snakeDirX == 1 && snakeDirY==0)) { snakeDirX=-1; snakeDirY=0; }
-    }
+    if (dx > threshold && !(snakeDirX == -1 && snakeDirY == 0)) { snakeDirX = 1; snakeDirY = 0; }
+    else if (dx < -threshold && !(snakeDirX == 1 && snakeDirY == 0)) { snakeDirX = -1; snakeDirY = 0; }
   } else {
-    // vertical
-    if (dy > threshold) {
-      // move down
-      if (!(snakeDirX==0 && snakeDirY==-1)) { snakeDirX=0; snakeDirY=1; }
-    } else if (dy < -threshold) {
-      // move up
-      if (!(snakeDirX==0 && snakeDirY==1)) { snakeDirX=0; snakeDirY=-1; }
-    }
+    if (dy > threshold && !(snakeDirX == 0 && snakeDirY == -1)) { snakeDirX = 0; snakeDirY = 1; }
+    else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) { snakeDirX = 0; snakeDirY = -1; }
   }
 }
 
@@ -174,124 +194,55 @@ void moveSnake() {
   snakeHeadX += snakeDirX;
   snakeHeadY += snakeDirY;
 
-  // Check boundaries
-  if (snakeHeadX<0||snakeHeadX>=MATRIX_SIZE||snakeHeadY<0||snakeHeadY>=MATRIX_SIZE) {
-    gameOver=true;return;
+  if (snakeHeadX < 0 || snakeHeadX >= MATRIX_WIDTH || snakeHeadY < 0 || snakeHeadY >= MATRIX_HEIGHT) {
+    gameOver = true;
+    return;
   }
 
-  // Check self collision
-  for (int i=0; i<snakeLength;i++){
-    if (snake[i].x==snakeHeadX && snake[i].y==snakeHeadY){
-      gameOver=true;return;
+  for (int i = 0; i < snakeLength; i++) {
+    if (snake[i].x == snakeHeadX && snake[i].y == snakeHeadY) {
+      gameOver = true;
+      return;
     }
   }
 
-  // Move body
-  for (int i=snakeLength-1;i>0;i--){
-    snake[i]=snake[i-1];
+  for (int i = snakeLength - 1; i > 0; i--) {
+    snake[i] = snake[i - 1];
   }
-  snake[0].x=snakeHeadX;
-  snake[0].y=snakeHeadY;
+  snake[0].x = snakeHeadX;
+  snake[0].y = snakeHeadY;
 
-  // Check food
-  if (hasFood && snakeHeadX==foodX && snakeHeadY==foodY) {
-    // eat and grow
+  if (hasFood && snakeHeadX == foodX && snakeHeadY == foodY) {
     growSnake();
-    hasFood=false;
+    hasFood = false;
     placeFood();
   }
 }
 
 void growSnake() {
-  if (snakeLength<MAX_SNAKE_LENGTH) {
-    // add a segment at the end, same pos as last tail (just grows in place)
-    snake[snakeLength] = snake[snakeLength-1];
+  if (snakeLength < MAX_SNAKE_LENGTH) {
+    snake[snakeLength] = snake[snakeLength - 1];
     snakeLength++;
   }
 }
 
 void drawSnakeAndFood() {
   matrixClear();
-  if (gameOver) {
-    // Show all LEDs ON for game over
-    for (int x=0;x<MATRIX_SIZE;x++){
-      for (int y=0;y<MATRIX_SIZE;y++){
-        matrixSetPixel(x,y,true);
-      }
-    }
-  } else {
-    // draw snake
-    for (int i=0;i<snakeLength;i++){
-      matrixSetPixel(snake[i].x,snake[i].y,true);
-    }
-    // draw food
-    if (hasFood) {
-      matrixSetPixel(foodX,foodY,true);
-    }
+  for (int i = 0; i < snakeLength; i++) {
+    matrixSetPixel(snake[i].x, snake[i].y, true);
   }
-}
-
-// ------------------- MATRIX CONTROL -------------------
-void matrixInit() {
-  // Set rows and columns as outputs
-  for (int r=0;r<8;r++){
-    pinMode(rowPins[r],OUTPUT);
-    digitalWrite(rowPins[r],HIGH); // active LOW rows
-  }
-  for (int c=0;c<8;c++){
-    pinMode(colPins[c],OUTPUT);
-    digitalWrite(colPins[c],LOW); // assume columns active HIGH
-  }
-  matrixClear();
-}
-
-// Clear the buffer
-void matrixClear() {
-  for (int y=0;y<8;y++){
-    for (int x=0;x<8;x++){
-      matrixBuffer[y][x]=false;
-    }
-  }
-}
-
-void matrixSetPixel(int x,int y,bool on) {
-  if (x<0||x>7||y<0||y>7)return;
-  matrixBuffer[y][x]=on;
-}
-
-void matrixScanDisplay() {
-  // Direct drive scanning
-  // Turn all rows off first
-  for (int rr=0;rr<8;rr++){
-    digitalWrite(rowPins[rr],HIGH);
-  }
-
-  // Scan each row
-  for (int r=0;r<8;r++){
-    // Set columns for this row
-    for (int c=0;c<8;c++){
-      if (matrixBuffer[r][c]) {
-        digitalWrite(colPins[c],HIGH); // LED on
-      } else {
-        digitalWrite(colPins[c],LOW);
-      }
-    }
-
-    // Enable this row (active LOW)
-    digitalWrite(rowPins[r],LOW);
-    delayMicroseconds(MATRIX_SCAN_DELAY_US);
-    digitalWrite(rowPins[r],HIGH);
+  if (hasFood && !gameOver) {
+    matrixSetPixel(foodX, foodY, true);
   }
 }
 
 // ------------------- TASKS -------------------
-
 void TaskBlink(void *pvParameters) {
   (void) pvParameters;
   for (;;) {
-    digitalWrite(LED_BUILTIN_PIN,HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
     vTaskDelay(BLINK_ON_MS / portTICK_PERIOD_MS);
-    digitalWrite(LED_BUILTIN_PIN,LOW);
+    digitalWrite(LED_BUILTIN, LOW);
     vTaskDelay(BLINK_OFF_MS / portTICK_PERIOD_MS);
   }
 }
@@ -299,19 +250,9 @@ void TaskBlink(void *pvParameters) {
 void TaskAnalogReadJoystick(void *pvParameters) {
   (void) pvParameters;
   for (;;) {
-    joyX=analogRead(JOYSTICK_X_PIN);
-    joyY=analogRead(JOYSTICK_Y_PIN);
-    vTaskDelay(ANALOG_READ_MS/portTICK_PERIOD_MS);
-  }
-}
-
-void TaskOffBoardLED(void *pvParameters) {
-  (void) pvParameters;
-  for (;;) {
-    digitalWrite(OFFBOARD_LED_PIN,HIGH);
-    vTaskDelay(100/portTICK_PERIOD_MS);
-    digitalWrite(OFFBOARD_LED_PIN,LOW);
-    vTaskDelay(200/portTICK_PERIOD_MS);
+    joyX = analogRead(JOYSTICK_X_PIN);
+    joyY = analogRead(JOYSTICK_Y_PIN);
+    vTaskDelay(ANALOG_READ_MS / portTICK_PERIOD_MS);
   }
 }
 
@@ -330,18 +271,7 @@ void TaskMatrixDisplay(void *pvParameters) {
   (void) pvParameters;
   for (;;) {
     drawSnakeAndFood();
-    // No hardware update here, just refresh the buffer
-    // The actual LED lighting is done by the scanning task
+    matrixSendBuffer();
     vTaskDelay(MATRIX_UPDATE_MS / portTICK_PERIOD_MS);
   }
 }
-
-void TaskMatrixScan(void *pvParameters) {
-  (void) pvParameters;
-  for (;;) {
-    matrixScanDisplay();
-    // No delay needed because scanning includes a delay per row
-    // You can add a small delay if flicker or brightness is off
-  }
-}
-

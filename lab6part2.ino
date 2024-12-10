@@ -4,6 +4,9 @@
 #include <stdlib.h> // for rand()
 
 // ------------------- Configuration -------------------
+#define LED_BUILTIN_PIN 13     // On-board LED
+#define OFFBOARD_LED_PIN 7     // Off-board LED pin
+
 // Matrix SPI pins
 #define DIN_PIN 6  // Data In
 #define CLK_PIN 7  // Clock
@@ -19,9 +22,11 @@
 
 // Task configurations
 #define STACK_BLINK 128
+#define STACK_OFFBOARD_LED 128
 #define STACK_ANALOGREAD 128
 #define STACK_SNAKEGAME 256
 #define STACK_MATRIXDISPLAY 256
+#define STACK_LED_DISPLAY 128
 
 // Timing intervals
 #define BLINK_ON_MS 250
@@ -30,7 +35,14 @@
 #define SNAKE_UPDATE_MS 500     // Slower update: 2 Hz
 #define MATRIX_UPDATE_MS 50     // 20 Hz update
 
+// Seven Segment Display
+const int segments[] = {23, 25, 27, 29, 31, 33, 35, 37}; // Pins connected to 7-segment segments
+int digits[] = {39, 41, 43, 45};          // Pins for digit selection
+byte numbers[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+
 // Snake game definitions
+int score = 0;
+
 struct SnakeSegment {
   int x, y;
 };
@@ -69,26 +81,41 @@ void moveSnake();
 void placeFood();
 void drawSnakeAndFood();
 void growSnake();
+void displayDigit(int digit, int number);
 
 // ------------------- SETUP & LOOP -------------------
 void setup() {
   Serial.begin(19200);
-  while (!Serial) {;}
+  while (!Serial) { ; }
 
-  pinMode(LED_BUILTIN, OUTPUT);
-
+  // Configure LED matrix
   matrixInit();
+  matrixClear();
+
+  // Configure 7-segment pins
+  for (int i = 0; i < 8; i++) {
+    pinMode(segments[i], OUTPUT);
+    digitalWrite(segments[i], LOW);
+  }
+  for (int i = 0; i < 4; i++) {
+    pinMode(digits[i], OUTPUT);
+    digitalWrite(digits[i], HIGH); // All digits off initially
+  }
+
   snakeInit();
   placeFood();
 
-  // Create tasks
+  // Task creation
   xTaskCreate(TaskBlink, "Blink", STACK_BLINK, NULL, 2, NULL);
-  xTaskCreate(TaskAnalogReadJoystick, "AnalogRead", STACK_ANALOGREAD, NULL, 1, NULL);
-  xTaskCreate(TaskSnakeGame, "SnakeGame", STACK_SNAKEGAME, NULL, 3, NULL);
-  xTaskCreate(TaskMatrixDisplay, "MatrixDisplay", STACK_MATRIXDISPLAY, NULL, 2, NULL);
+  xTaskCreate(TaskOffBoardLED, "OffBoardLED", STACK_OFFBOARD_LED, NULL, 1, NULL);
+  xTaskCreate(TaskSnakeGame, "SnakeGame", STACK_SNAKEGAME , NULL, 3, NULL);
+  xTaskCreate(TaskMatrixDisplay, "MatrixDisp", STACK_MATRIXDISPLAY, NULL, 2, NULL);
+  xTaskCreate(TaskDisplayScore, "DisplayScore", STACK_LED_DISPLAY, NULL, 1, NULL);
+  xTaskCreate(TaskAnalogReadJoystick, "JoystickRead", STACK_ANALOGREAD, NULL, 1, NULL);
 
   vTaskStartScheduler();
 }
+
 
 void loop() {
   // Empty, all handled by tasks
@@ -180,11 +207,23 @@ void updateDirectionFromJoystick() {
   int dy = joyY - center;
 
   if (abs(dx) > abs(dy)) {
-    if (dx > threshold && !(snakeDirX == -1 && snakeDirY == 0)) { snakeDirX = 1; snakeDirY = 0; }
-    else if (dx < -threshold && !(snakeDirX == 1 && snakeDirY == 0)) { snakeDirX = -1; snakeDirY = 0; }
+    if (dx > threshold && !(snakeDirX == -1 && snakeDirY == 0)) {
+      snakeDirX = 1;
+      snakeDirY = 0;
+    }
+    else if (dx < -threshold && !(snakeDirX == 1 && snakeDirY == 0)) {
+      snakeDirX = -1;
+      snakeDirY = 0;
+    }
   } else {
-    if (dy > threshold && !(snakeDirX == 0 && snakeDirY == -1)) { snakeDirX = 0; snakeDirY = 1; }
-    else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) { snakeDirX = 0; snakeDirY = -1; }
+    if (dy > threshold && !(snakeDirX == 0 && snakeDirY == -1)) {
+      snakeDirX = 0;
+      snakeDirY = 1;
+    }
+    else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) {
+      snakeDirX = 0;
+      snakeDirY = -1;
+    }
   }
 }
 
@@ -224,6 +263,7 @@ void growSnake() {
     snake[snakeLength] = snake[snakeLength - 1];
     snakeLength++;
   }
+  score++;
 }
 
 void drawSnakeAndFood() {
@@ -236,6 +276,16 @@ void drawSnakeAndFood() {
   }
 }
 
+// ---------------SEVEN SEG DISPLAY ------------
+void displayDigit(int digit, int number) {
+  // Set the segments for the given number
+  for (int i = 0; i < 7; i++) {
+    digitalWrite(segments[i], (numbers[number] >> i) & 1);
+  }
+  // Activate the digit (active LOW)
+  digitalWrite(digits[digit], LOW);
+}
+
 // ------------------- TASKS -------------------
 void TaskBlink(void *pvParameters) {
   (void) pvParameters;
@@ -244,6 +294,16 @@ void TaskBlink(void *pvParameters) {
     vTaskDelay(BLINK_ON_MS / portTICK_PERIOD_MS);
     digitalWrite(LED_BUILTIN, LOW);
     vTaskDelay(BLINK_OFF_MS / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskOffBoardLED(void *pvParameters) {
+  (void) pvParameters;
+  for (;;) {
+    digitalWrite(OFFBOARD_LED_PIN,HIGH);
+    vTaskDelay(100/portTICK_PERIOD_MS);
+    digitalWrite(OFFBOARD_LED_PIN,LOW);
+    vTaskDelay(200/portTICK_PERIOD_MS);
   }
 }
 
@@ -273,5 +333,27 @@ void TaskMatrixDisplay(void *pvParameters) {
     drawSnakeAndFood();
     matrixSendBuffer();
     vTaskDelay(MATRIX_UPDATE_MS / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskDisplayScore(void *pvParameters) {
+  (void) pvParameters;
+  static int currentDigit = 0; // Keep track of the current digit
+
+  for (;;) {
+    // Turn off the current digit
+    digitalWrite(digits[currentDigit], HIGH);
+
+    // Move to the next digit
+    currentDigit = (currentDigit + 1) % 4;
+
+    // Extract the value for the current digit from the score
+    int digitValue = (score / (int)pow(10, 3 - currentDigit)) % 10;
+
+    // Display the value on the current digit
+    displayDigit(currentDigit, digitValue);
+
+    // Wait before updating the next digit
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }

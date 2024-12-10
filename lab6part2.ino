@@ -357,7 +357,7 @@ void TaskMatrixDisplay(void *pvParameters) {
 
 void TaskDisplayScore(void *pvParameters) {
   (void) pvParameters;
-  static int currentDigit = 0; // Keep track of the current digit
+  static int currentDigit = 0; // Tracks the current digit being updated
 
   for (;;) {
     // Turn off the current digit
@@ -366,16 +366,25 @@ void TaskDisplayScore(void *pvParameters) {
     // Move to the next digit
     currentDigit = (currentDigit + 1) % 4;
 
-    // Extract the value for the current digit from the score
-    int digitValue = (score / (int)pow(10, 3 - currentDigit)) % 10;
+    // Determine the value to display:
+    // - First two digits (0 and 1): High score
+    // - Last two digits (2 and 3): Current score
+    int displayValue = (currentDigit < 2) ? highScore : score;
+    int digitIndex = currentDigit % 2; // Get the index within the respective two digits
+    int digitValue = (displayValue / (int)pow(10, 1 - digitIndex)) % 10;
 
     // Display the value on the current digit
     displayDigit(currentDigit, digitValue);
+
+    // Activate the current digit (active LOW)
+    digitalWrite(digits[currentDigit], LOW);
 
     // Wait before updating the next digit
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
+
+
 
 void TaskResetButton(void *pvParameters) {
   (void) pvParameters;

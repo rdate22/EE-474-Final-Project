@@ -7,6 +7,8 @@
 #define LED_BUILTIN_PIN 13     // On-board LED
 #define OFFBOARD_LED_PIN 7     // Off-board LED pin
 
+#define RESET_BUTTON_PIN 8 // reset button
+
 // Matrix SPI pins
 #define DIN_PIN 6  // Data In
 #define CLK_PIN 7  // Clock
@@ -27,6 +29,7 @@
 #define STACK_SNAKEGAME 256
 #define STACK_MATRIXDISPLAY 256
 #define STACK_LED_DISPLAY 128
+#define STACK_RESET 128
 
 // Timing intervals
 #define BLINK_ON_MS 250
@@ -42,6 +45,7 @@ byte numbers[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
 // Snake game definitions
 int score = 0;
+static int highScore = 0;
 
 struct SnakeSegment {
   int x, y;
@@ -82,6 +86,7 @@ void placeFood();
 void drawSnakeAndFood();
 void growSnake();
 void displayDigit(int digit, int number);
+void resetGame();
 
 // ------------------- SETUP & LOOP -------------------
 void setup() {
@@ -102,16 +107,19 @@ void setup() {
     digitalWrite(digits[i], HIGH); // All digits off initially
   }
 
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP); // reset button pin
+
   snakeInit();
   placeFood();
 
   // Task creation
   xTaskCreate(TaskBlink, "Blink", STACK_BLINK, NULL, 2, NULL);
   xTaskCreate(TaskOffBoardLED, "OffBoardLED", STACK_OFFBOARD_LED, NULL, 1, NULL);
-  xTaskCreate(TaskSnakeGame, "SnakeGame", STACK_SNAKEGAME , NULL, 3, NULL);
+  xTaskCreate(TaskSnakeGame, "SnakeGame", STACK_SNAKEGAME, NULL, 3, NULL);
   xTaskCreate(TaskMatrixDisplay, "MatrixDisp", STACK_MATRIXDISPLAY, NULL, 2, NULL);
   xTaskCreate(TaskDisplayScore, "DisplayScore", STACK_LED_DISPLAY, NULL, 1, NULL);
   xTaskCreate(TaskAnalogReadJoystick, "JoystickRead", STACK_ANALOGREAD, NULL, 1, NULL);
+  xTaskCreate(TaskResetButton, "ResetButton", STACK_RESET, NULL, 1, NULL);
 
   vTaskStartScheduler();
 }
@@ -276,6 +284,17 @@ void drawSnakeAndFood() {
   }
 }
 
+void resetGame() {
+  if (score > highScore) {
+    highScore = score;
+  }
+  score = 0;
+  snakeInit();
+  placeFood();
+  gameOver = false;
+}
+
+
 // ---------------SEVEN SEG DISPLAY ------------
 void displayDigit(int digit, int number) {
   // Set the segments for the given number
@@ -300,10 +319,10 @@ void TaskBlink(void *pvParameters) {
 void TaskOffBoardLED(void *pvParameters) {
   (void) pvParameters;
   for (;;) {
-    digitalWrite(OFFBOARD_LED_PIN,HIGH);
-    vTaskDelay(100/portTICK_PERIOD_MS);
-    digitalWrite(OFFBOARD_LED_PIN,LOW);
-    vTaskDelay(200/portTICK_PERIOD_MS);
+    digitalWrite(OFFBOARD_LED_PIN, HIGH);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    digitalWrite(OFFBOARD_LED_PIN, LOW);
+    vTaskDelay(200 / portTICK_PERIOD_MS);
   }
 }
 
@@ -355,5 +374,17 @@ void TaskDisplayScore(void *pvParameters) {
 
     // Wait before updating the next digit
     vTaskDelay(5 / portTICK_PERIOD_MS);
+  }
+}
+
+void TaskResetButton(void *pvParameters) {
+  (void) pvParameters;
+
+  for (;;) {
+    if (digitalRead(RESET_BUTTON_PIN) == LOW) { // Button pressed
+      resetGame();
+      vTaskDelay(500 / portTICK_PERIOD_MS); // Debounce delay
+    }
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Polling delay
   }
 }

@@ -35,7 +35,7 @@
 #define BLINK_ON_MS 250
 #define BLINK_OFF_MS 100
 #define ANALOG_READ_MS 50
-#define SNAKE_UPDATE_MS 500     // Slower update: 2 Hz
+#define SNAKE_UPDATE_MS 500     // Game update speed 500: 2Hz 200: 5Hz
 #define MATRIX_UPDATE_MS 50     // 20 Hz update
 
 // Seven Segment Display
@@ -218,22 +218,22 @@ void updateDirectionFromJoystick() {
   if (abs(dx) > abs(dy)) {
     if (dx > threshold && !(snakeDirX == -1 && snakeDirY == 0)) {
       // Moving joystick right -> snake moves right
-      snakeDirX = -1;
+      snakeDirX = 1;
       snakeDirY = 0;
     }
     else if (dx < -threshold && !(snakeDirX == 1 && snakeDirY == 0)) {
       // Moving joystick left -> snake moves left
-      snakeDirX = 1;
+      snakeDirX = -1;
       snakeDirY = 0;
     }
   } else {
     if (dy > threshold && !(snakeDirX == 0 && snakeDirY == -1)) {
-      // Moving joystick up -> snake moves down (invert for correct behavior)
+      // Moving joystick up -> snake moves down
       snakeDirX = 0;
       snakeDirY = -1;
     }
     else if (dy < -threshold && !(snakeDirX == 0 && snakeDirY == 1)) {
-      // Moving joystick down -> snake moves up (invert for correct behavior)
+      // Moving joystick down -> snake moves up
       snakeDirX = 0;
       snakeDirY = 1;
     }
@@ -388,8 +388,6 @@ void TaskDisplayScore(void *pvParameters) {
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
-
-
 
 void TaskResetButton(void *pvParameters) {
   (void) pvParameters;
